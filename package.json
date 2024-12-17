@@ -1,0 +1,61 @@
+{
+  "name": "katz-ai-trench-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "build": "node esbuild.config.js",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@google-cloud/speech": "^6.1.0",
+    "@metaplex-foundation/js": "^0.20.1",
+    "@napi-rs/canvas": "^0.1.44",
+    "@solana/spl-token": "^0.4.1",
+    "@solana/web3.js": "^1.87.6",
+    "@walletconnect/modal": "^2.7.0",
+    "@walletconnect/sign-client": "^2.17.2",
+    "alchemy-sdk": "^3.1.0",
+    "apify-client": "^2.8.4",
+    "axios": "^1.6.2",
+    "bip39": "^3.1.0",
+    "bluebird": "^3.7.2",
+    "body-parser": "^1.20.3",
+    "bs58": "^5.0.0",
+    "canvas-multiline-text": "^1.0.3",
+    "chartjs-node-canvas": "^4.1.6",
+    "color": "^4.2.3",
+    "crypto-js": "^4.2.0",
+    "date-fns": "^3.0.0",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.9.0",
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "gif-encoder-2": "^1.0.5",
+    "googleapis": "^129.0.0",
+    "gradient-string": "^2.0.2",
+    "hdkey": "^2.1.0",
+    "mongodb": "^6.3.0",
+    "mongoose": "^8.0.3",
+    "node-fetch": "^3.3.2",
+    "node-record-lpcm16": "^1.0.1",
+    "node-telegram-bot-api": "^0.64.0",
+    "nodemon": "^3.0.2",
+    "openai": "^4.20.1",
+    "p-queue": "^7.4.1",
+    "p-retry": "^6.2.1",
+    "promise": "^8.3.0",
+    "qrcode": "^1.5.3",
+    "sharp": "^0.33.5",
+    "speech-to-text": "^2.9.1",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.19.8",
+    "vitest": "^0.34.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
