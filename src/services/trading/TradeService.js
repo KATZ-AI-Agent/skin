@@ -31,8 +31,18 @@ export class TradeService extends EventEmitter {
    */
   
   async executeTrade(params) {
-    try {
+    try { 
       this.validateTradeParams(params);
+
+      // Pre-execution validation
+      const validationResult = await quickNodeService.simulateTransaction({
+        ...params,
+        dryRun: true 
+      });
+  
+      if (!validationResult.success) {
+        throw new Error(`Trade validation failed: ${validationResult.error}`);
+      }
 
       // Build transaction based on network
       const tx = params.network === 'solana' 
@@ -59,16 +69,27 @@ export class TradeService extends EventEmitter {
   }
 
   async buildSolanaTransaction(params) {
-    // Add Solana transaction building logic
+    // Add gas estimation
+    const priorityFee = await quickNodeService.fetchEstimatePriorityFees();
+    const gasEstimate = await quickNodeService.estimateGas(params);
+  
+    // Prepare transaction with proper fees
     const smartTx = await quickNodeService.prepareSmartTransaction({
-      transaction: params,
+      ...params,
+      priorityFee,
+      gasLimit: gasEstimate.gasLimit,
       options: {
         maxRetries: 3,
-        skipPreflight: false
+        skipPreflight: false,
+        simulation: {
+          enabled: true,
+          replaceOnFailure: true
+        }
       }
     });
+  
     return smartTx;
-  }
+  } 
 
   async buildEvmTransaction(params) {
     // Add EVM transaction building logic

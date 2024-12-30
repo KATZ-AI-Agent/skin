@@ -100,15 +100,6 @@ class FlipperMode extends EventEmitter {
     }
   }
 
-  // Add recovery method:
-  async reconnectPriceFeeds() {
-    for (const [tokenAddress] of this.openPositions) {
-      await this.positionMonitor.setupRedundantPriceFeeds({
-        address: tokenAddress
-      });
-    }
-  }
-
   snapshotSystemMetrics() {
     setInterval(async () => {
       try {
@@ -391,21 +382,25 @@ class FlipperMode extends EventEmitter {
       async () => {
         try {
           // Set up redundant price monitoring
-          const priceFeeds = await Promise.all([
-            // Primary QuickNode WebSocket feed
+          const [primaryFeed, backupOracle] = await Promise.all([
             this.positionMonitor.setupRedundantPriceFeeds({
               address: position.token.address,
               ...position.token
             }),
-            
-            // Secondary DexTools price feed
-            dextools.subscribeToPriceUpdates(
-              'solana', 
-              position.token.address,
-              price => this.handlePriceUpdate(position.token.address, price)
-            )
+            quickNodeService.setupPriceOracle(position.token.address)
           ]);
-  
+
+          // Enhanced price monitoring with backup oracle
+          this.positionMonitor.on('priceUpdate', async ({ tokenAddress, price }) => {
+            // Verify price with backup oracle
+            const oraclePrice = await backupOracle.getPrice();
+            const priceDiff = Math.abs(price - oraclePrice) / price;
+
+            // If price difference > 1%, use oracle price
+            const finalPrice = priceDiff > 0.01 ? oraclePrice : price;
+            await this.updatePosition(tokenAddress, finalPrice);
+          });
+
           // Set up metrics collection
           this.positionMonitor.on('update', ({ token, metrics }) => {
             if (token === position.token.address) {
@@ -418,7 +413,7 @@ class FlipperMode extends EventEmitter {
               });
             }
           });
-  
+
           // Set up error recovery
           this.positionMonitor.on('error', async (error) => {
             await this.errorRecovery.handleError(error, {
@@ -427,7 +422,7 @@ class FlipperMode extends EventEmitter {
               component: 'priceMonitor'
             });
           });
-  
+
           // Set up position timeout with grace period
           const timeoutId = setTimeout(() => {
             this.closePosition(position.token.address, 'timeout')
@@ -437,7 +432,7 @@ class FlipperMode extends EventEmitter {
                 position
               }));
           }, this.config.timeLimit);
-  
+
           // Store monitoring state
           this.openPositions.set(position.token.address, {
             ...position,
@@ -445,7 +440,7 @@ class FlipperMode extends EventEmitter {
             timeoutId,
             monitoringStarted: Date.now()
           });
-  
+
           // Initialize position stats
           this.positionStats.set(position.token.address, {
             entryTime: position.entryTime,
@@ -457,21 +452,19 @@ class FlipperMode extends EventEmitter {
             liquidity: 0,
             lastUpdate: Date.now()
           });
-  
+
           // Set up periodic metrics snapshot
           const snapshotInterval = setInterval(() => {
             this.saveLiveSystemMetrics().catch(console.error);
           }, 60000); // Every minute
-  
+
           // Clean up on position close
           this.once(`positionClosed_${position.token.address}`, () => {
             clearInterval(snapshotInterval);
             clearTimeout(timeoutId);
             priceFeeds.forEach(feed => feed.close?.());
           });
-  
-          console.log(`✅ Position monitoring started for ${position.token.symbol}`);
-  
+
         } catch (error) {
           await this.handleError(error, {
             operation: 'monitorPosition',
@@ -489,13 +482,13 @@ class FlipperMode extends EventEmitter {
       },
       BREAKER_CONFIGS.pumpfun
     );
-  }   
-  
-  // Add new method to handle metrics updates
+  }
+
+  // Handle metrics updates
   async handleMetricsUpdate(tokenAddress, metrics) {
     const position = this.openPositions.get(tokenAddress);
     if (!position) return;
-  
+
     try {
       // Update position stats with enhanced metrics
       const stats = this.positionStats.get(tokenAddress) || {
@@ -507,7 +500,7 @@ class FlipperMode extends EventEmitter {
         volume: 0,
         liquidity: 0
       };
-  
+
       // Update stats with new metrics
       stats.currentPrice = metrics.price;
       stats.highPrice = Math.max(stats.highPrice, metrics.price);
@@ -515,9 +508,9 @@ class FlipperMode extends EventEmitter {
       stats.volume = metrics.volume;
       stats.liquidity = metrics.liquidity;
       stats.updates++;
-  
+
       this.positionStats.set(tokenAddress, stats);
-  
+
       // Emit metrics update
       this.emit('metricsUpdate', {
         token: tokenAddress,
@@ -526,6 +519,29 @@ class FlipperMode extends EventEmitter {
     } catch (error) {
       await ErrorHandler.handle(error);
       this.emit('error', error);
+    }
+  }
+
+  // Add recovery method:
+  async reconnectPriceFeeds() {
+    for (const [tokenAddress] of this.openPositions) {
+      await this.positionMonitor.setupRedundantPriceFeeds({
+        address: tokenAddress
+      });
+    }
+  }
+
+  // Error recovery handler
+  async handleError(error, context) {
+    try {
+      await this.errorRecovery.handleError(error, {
+        ...context,
+        component: 'FlipperMode',
+        userId: this.userId
+      });
+    } catch (recoveryError) {
+      console.error('Error recovery failed:', recoveryError);
+      await this.stop(null, this.userId); // Force stop if recovery fails
     }
   }
 
@@ -826,19 +842,6 @@ async fetchMetrics() {
     } catch (error) {
       console.error('Error fetching metrics:', error);
       throw new Error('Failed to fetch metrics. Please check the collections or database connection.');
-    }
-  }
-  // Error recovery handler
-  async handleError(error, context) {
-    try {
-      await this.errorRecovery.handleError(error, {
-        ...context,
-        component: 'FlipperMode',
-        userId: this.userId
-      });
-    } catch (recoveryError) {
-      console.error('Error recovery failed:', recoveryError);
-      await this.stop(null, this.userId); // Force stop if recovery fails
     }
   }
   

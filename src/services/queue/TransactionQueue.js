@@ -8,6 +8,7 @@ import { tokenApprovalService } from '../../services/tokens/TokenApprovalService
 import { TransactionProcessor } from './processors/TransactionProcessor.js';
 import { circuitBreakers } from '../../core/circuit-breaker/index.js';
 import { BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
+import { quickNodeService } from '../../services/quicknode/QuickNodeService.js';
 
 class TransactionQueue extends EventEmitter {
   constructor() {
@@ -93,13 +94,32 @@ class TransactionQueue extends EventEmitter {
 
   /** Process a transaction */
   async processTransaction(tx) {
-    return circuitBreakers.executeWithBreaker(
-      'quickNode',
-      async () => {
-        return await this.processor.processTransaction(tx);
-      },
-      BREAKER_CONFIGS.quickNode
-    );
+    try {
+      // Validate and simulate first
+      const simulation = await quickNodeService.simulateTransaction(tx);
+      if (!simulation.success) {
+        throw new Error(`Simulation failed: ${simulation.error}`);
+      }
+
+      // Get optimal priority fee
+      const priorityFee = await quickNodeService.fetchEstimatePriorityFees();
+
+      // Prepare final transaction
+      const finalTx = await quickNodeService.prepareSmartTransaction({
+        ...tx,
+        priorityFee,
+        options: {
+          maxRetries: 3,
+          skipPreflight: false
+        }
+      });
+
+      // Execute
+      return await quickNodeService.sendSmartTransaction(finalTx);
+    } catch (error) {
+      await ErrorHandler.handle(error);
+      throw error;
+    }
   }
 
   async executeMultipleOrders(orders) {
