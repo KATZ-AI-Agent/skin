@@ -1,12 +1,13 @@
 import PQueue from 'p-queue';
-import { User } from '../../models/User.js';
 import { config } from '../../core/config.js';
 import { EventEmitter } from 'events';
-import { walletService } from '../../services/wallet/index.js';
 import { EVMProvider } from '../../services/wallet/wallets/evm.js';
 import { SolanaWallet as SolanaProvider } from '../../services/wallet/wallets/solana.js';
 import { gasEstimationService } from '../../services/gas/GasEstimationService.js';
 import { tokenApprovalService } from '../../services/tokens/TokenApprovalService.js';
+import { TransactionProcessor } from './processors/TransactionProcessor.js';
+import { circuitBreakers } from '../../core/circuit-breaker/index.js';
+import { BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
 
 class TransactionQueue extends EventEmitter {
   constructor() {
@@ -24,6 +25,7 @@ class TransactionQueue extends EventEmitter {
     this._initQueues();
 
     // Track pending transactions
+    this.processor = new TransactionProcessor(this);
     this.pendingTransactions = new Map();
 
     // Track gas prices
@@ -91,56 +93,42 @@ class TransactionQueue extends EventEmitter {
 
   /** Process a transaction */
   async processTransaction(tx) {
-    try {
-      // Get the active wallet for the default network
-      // Fetch user document
-      const user = await User.findByTelegramId(userInfo.id);
-      if (!user) {
-        await this.showWalletRequiredMessage(chatId);
-        return;
-      }
-
-      // Get Solana wallet with autonomous trading enabled
-      const solanaWallet = user.wallets.solana?.find(w => w.isAutonomous);
-      if (!solanaWallet) {
-        await this.bot.sendMessage(
-          chatId,
-          `❌ *No Solana wallet is enabled for autonomous trading.*\n\n` +
-            `Please enable autonomous trading in wallet settings.`,
-          {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '⚙️ Go to Wallets', callback_data: 'back_to_wallets' }],
-              ],
-            },
-          }
-        );
-        return;
-      }
-
-      // Fetch user's slippage settings
-      const slippage = user.settings.trading.slippage.solana || 3;
-
-      const balance = await walletService.getBalance(tx.userId, solanaWallet.address);
-
-      if (balance < tx.estimatedGas) {
-        throw new Error('❌ Insufficient balance for gas');
-      }
-
-      // Execute trade
-      return await walletService.executeTrade(tx.network, {
-        action: tx.type,
-        tokenAddress: tx.tokenAddress,
-        amount: tx.amount,
-        walletAddress: solanaWallet.address,
-      });
-    } catch (error) {
-      throw new Error(`Transaction processing failed: ${error.message}`);
-    }
+    return circuitBreakers.executeWithBreaker(
+      'quickNode',
+      async () => {
+        return await this.processor.processTransaction(tx);
+      },
+      BREAKER_CONFIGS.quickNode
+    );
   }
 
-  /** Update transaction status */
+  async executeMultipleOrders(orders) {
+    try {
+      // Sort orders by priority
+      const sortedOrders = orders.sort((a, b) => b.priority - a.priority);
+  
+      // Process in batches of 3
+      const batches = [];
+      for (let i = 0; i < sortedOrders.length; i += 3) {
+        batches.push(sortedOrders.slice(i, i + 3));
+      }
+  
+      // Execute batches sequentially
+      const results = [];
+      for (const batch of batches) {
+        const batchResults = await Promise.all(
+          batch.map(order => this.processTransaction(order))
+        );
+        results.push(...batchResults);
+      }
+  
+      return results;
+    } catch (error) {
+      console.error('Error executing multiple orders:', error);
+      throw error;
+    }
+  }  
+
   _updateTransactionStatus(id, status, result = null, error = null) {
     const transaction = this.pendingTransactions.get(id);
     if (transaction) {
@@ -149,7 +137,7 @@ class TransactionQueue extends EventEmitter {
         status,
         result,
         error,
-        completedAt: Date.now(),
+        completedAt: Date.now()
       });
     }
   }

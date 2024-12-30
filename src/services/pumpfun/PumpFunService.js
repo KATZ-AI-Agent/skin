@@ -18,6 +18,9 @@ class PumpFunService extends EventEmitter {
     this.connection = new Connection(networkConfig.rpcUrl, 'confirmed'); // Solana connection
     this.apiKey = config.pumpFunApiKey; // API Key for authenticated requests
 
+    this.wsManager = wsManager;
+    this.tokenDetector = tokenLaunchDetector;
+
     this.subscribers = new Map(); // Manage event subscriptions
     this.reconnectAttempts = 0;
     this.heartbeatInterval = null;
@@ -32,22 +35,26 @@ class PumpFunService extends EventEmitter {
   /**
    * Establish WebSocket connection
    */
+
+  // Update connect method:
   async connect() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
-
     try {
-      console.log(`🌐 Connecting to PumpPortal WebSocket: ${this.websocketEndpoint}`);
-      this.ws = new WebSocket(this.websocketEndpoint);
+      const ws = await this.wsManager.createConnection(
+        this.websocketEndpoint,
+        {
+          reconnect: true,
+          onMessage: this.handleMessage.bind(this)
+        }
+      );
 
-      // Bind WebSocket event handlers
-      this.ws.on('open', this.handleOpen.bind(this));
-      this.ws.on('message', this.handleMessage.bind(this));
-      this.ws.on('close', this.handleClose.bind(this));
-      this.ws.on('error', this.handleError.bind(this));
+      this.ws = ws;
+      this.startHeartbeat();
+
     } catch (error) {
-      console.error('❌ Pumpfun WebSocket connection error:', error);
-      await ErrorHandler.handle(error);
-      this.handleReconnect();
+      await this.errorRecovery.handleError(error, {
+        operation: 'connect',
+        endpoint: this.websocketEndpoint
+      });
     }
   }
 

@@ -29,17 +29,17 @@ export class TradeService extends EventEmitter {
    * @param {boolean} [params.options.autoApprove] Auto-approve tokens for EVM
    * @returns {Promise<Object>} Trade result with hash and price
    */
+  
   async executeTrade(params) {
     try {
       this.validateTradeParams(params);
 
-      // 1. Build transaction based on network
+      // Build transaction based on network
       const tx = params.network === 'solana' 
         ? await this.buildSolanaTransaction(params)
         : await this.buildEvmTransaction(params);
 
-      // 2 & 3 alternative. Queue transaction with high priority
-      /* Queue is always running?
+      // Queue transaction
       return await transactionQueue.addTransaction({
         id: `trade_${params.tokenAddress}_${Date.now()}`,
         type: params.action,
@@ -48,24 +48,33 @@ export class TradeService extends EventEmitter {
         tokenAddress: params.tokenAddress,
         amount: params.amount,
         transaction: tx,
-        priority: 2, // High priority for trades
+        priority: 2, // High priority
         options: params.options
       });
-      */
-
-      
-      // 2. Get wallet provider
-      const provider = await walletService.getProvider(params.network);
-      
-      // 3. Execute network-specific trade
-      return params.network === 'solana' 
-        ? this.executeSolanaTrade(provider, params)
-        : this.executeEvmTrade(provider, params);
 
     } catch (error) {
       await ErrorHandler.handle(error);
       throw error;
     }
+  }
+
+  async buildSolanaTransaction(params) {
+    // Add Solana transaction building logic
+    const smartTx = await quickNodeService.prepareSmartTransaction({
+      transaction: params,
+      options: {
+        maxRetries: 3,
+        skipPreflight: false
+      }
+    });
+    return smartTx;
+  }
+
+  async buildEvmTransaction(params) {
+    // Add EVM transaction building logic
+    const provider = await walletService.getProvider(params.network);
+    // Build EVM transaction
+    return tx;
   }
 
   //Jito Bulk Txns Implementation

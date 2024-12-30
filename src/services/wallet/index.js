@@ -80,6 +80,16 @@ class WalletService extends EventEmitter {
       return provider;
     }
 
+    async executeTrade(network, params) {
+      return tradeService.executeTrade({
+        network,
+        ...params,
+        options: {
+          autoApprove: true // Enable auto-approval by default
+        }
+      });
+    }
+
     async getWallets(userId) {
       try {
         // Ensure WalletService is initialized

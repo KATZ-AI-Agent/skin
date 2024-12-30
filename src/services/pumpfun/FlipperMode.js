@@ -1,5 +1,8 @@
 import { EventEmitter } from 'events';
 import PQueue from 'p-queue';
+import { wsManager } from './WebSocketManager.js';
+import { retryManager } from '../queue/RetryManager.js';
+import { positionMonitor } from '../quicknode/PositionMonitor.js';
 import { monitoringSystem } from '../../core/monitoring/Monitor.js';
 import { circuitBreakers } from '../../core/circuit-breaker/index.js';
 import { BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
@@ -7,12 +10,17 @@ import { User } from '../../models/User.js';
 import { dextools } from '../dextools/index.js';
 import { walletService } from '../../services/wallet/index.js';
 import { transactionQueue } from '../queue/TransactionQueue.js';
-import { db } from '../../core/database.js'; // MongoDB instance
+import { db } from '../../core/database.js';
+import { tokenLaunchDetector } from './detection/TokenLaunchDetector.js';
+import { solanaTradeOptimizer } from '../trading/optimizers/SolanaTradeOptimizer.js';
+import { enhancedQueue } from '../queue/enhanced/EnhancedTransactionQueue.js';
+import { enhancedPositionMonitor } from '../monitoring/enhanced/PositionMonitor.js';
+import { errorRecoverySystem } from '../errors/ErrorRecoverySystem.js';
 
 class FlipperMode extends EventEmitter {
   constructor() {
     super();
-
+    
     // State management
     this.openPositions = new Map();
     this.positionStats = new Map();
@@ -29,6 +37,10 @@ class FlipperMode extends EventEmitter {
       interval: 500,
       intervalCap: 1,
     });
+
+    this.transactionQueue = enhancedQueue;
+    this.positionMonitor = enhancedPositionMonitor;
+    this.errorRecovery = errorRecoverySystem;
 
     // Configuration
     this.config = {
@@ -62,6 +74,15 @@ class FlipperMode extends EventEmitter {
       this.userMetricsCollection = database.collection('userMetrics');
       this.systemMetricsCollection = database.collection('systemMetrics');
 
+      //Initialize Error Recovery Service
+      await this.errorRecovery.initialize();
+
+      this.errorRecovery.on('recovered', async ({ type, context }) => {
+        if (type === 'WEBSOCKET_DISCONNECT') {
+          await this.reconnectPriceFeeds();
+        }
+      });
+
       // Register with the monitoring system
       monitoringSystem.registerComponent('flipperMode', {
         getMetrics: this.collectMetrics.bind(this),
@@ -76,6 +97,15 @@ class FlipperMode extends EventEmitter {
     } catch (error) {
       console.error('Error during FlipperMode initialization:', error);
       throw error;
+    }
+  }
+
+  // Add recovery method:
+  async reconnectPriceFeeds() {
+    for (const [tokenAddress] of this.openPositions) {
+      await this.positionMonitor.setupRedundantPriceFeeds({
+        address: tokenAddress
+      });
     }
   }
 
@@ -166,6 +196,32 @@ class FlipperMode extends EventEmitter {
       BREAKER_CONFIGS.pumpfun
     );
   }
+
+  async setupPriceMonitoring() {
+    try {
+      // Get all open positions
+      const positions = Array.from(this.openPositions.values());
+      
+      // Set up monitoring for each position
+      for (const position of positions) {
+        await this.positionMonitor.setupRedundantPriceFeeds({
+          address: position.token.address,
+          ...position.token
+        });
+      }
+  
+      // Listen for price updates
+      this.positionMonitor.on('priceUpdate', ({ tokenAddress, price, updates }) => {
+        this.updatePosition(tokenAddress, price);
+      });
+  
+      console.log('✅ Price monitoring setup complete');
+    } catch (error) {
+      console.error('Error setting up price monitoring:', error);
+      throw error;
+    }
+  }
+  
   
   async stop(bot, userId) {
     return circuitBreakers.executeWithBreaker(
@@ -270,74 +326,51 @@ class FlipperMode extends EventEmitter {
     }
   }
 
+  // processNewToken method:
   async processNewToken(token) {
-    await this.saveLiveSystemMetrics(); // Save live metrics during processing
-  
-    return circuitBreakers.executeWithBreaker(
-      'pumpfun',
-      async () => {
-        if (!this.shouldProcessToken(token)) {
-          return;
-        }
-  
-        return this.tokenQueue.add(async () => {
-          try {
-            const wallet = await walletService.getWallet(this.userId, this.walletAddress);
-  
-            // For external wallets, request approval first
-            if (wallet.type === 'walletconnect') {
-              const approvalStatus = await walletService.checkAndRequestApproval(
-                token.address,
-                this.walletAddress,
-                this.config.buyAmount
-              );
-  
-              if (!approvalStatus.approved) {
-                throw new Error('Token approval required');
-              }
-            }
-  
-            // Queue the buy transaction
-            const txResult = await transactionQueue.addTransaction({
-              id: `flip_buy_${token.address}_${Date.now()}`,
-              type: 'buy',
-              network: 'solana',
-              userId: this.userId,
-              tokenAddress: token.address,
-              amount: this.config.buyAmount,
-              priority: 1,
-              requiresApproval: wallet.type === 'walletconnect',
-            });
-  
-            // Track position
-            const position = {
-              token,
-              entryPrice: txResult.price,
-              amount: txResult.amount,
-              entryTime: Date.now(),
-              txHash: txResult.hash,
-              walletType: wallet.type,
-            };
-  
-            this.openPositions.set(token.address, position);
-            await this.monitorPosition(position);
-  
-            this.emit('entryExecuted', { token, result: txResult });
-          } catch (error) {
-            console.error('Error processing token:', error);
-  
-            // Log the error using the custom ErrorHandler
-            await ErrorHandler.handle(error, null, this.userId);
-  
-            // Blacklist the token and emit an error event
-            // this.blacklistedTokens.add(token.address);
-            this.emit('error', error);
-          }
+    try {
+      // Validate token first
+      const isValid = await tokenLaunchDetector.validateToken(token);
+      if (!isValid) return;
+
+      // Prepare trade with optimizer
+      const preparedTrade = await solanaTradeOptimizer.prepareTrade({
+        network: 'solana',
+        action: 'buy',
+        tokenAddress: token.address,
+        amount: this.config.buyAmount,
+        walletAddress: this.walletAddress,
+        userId: this.userId
+      });
+
+      // Queue transaction with high priority
+      const result = await this.transactionQueue.addTransaction(preparedTrade, 'high');
+
+      if (result.success) {
+        // Set up enhanced position monitoring
+        await this.positionMonitor.setupRedundantPriceFeeds({
+          address: token.address,
+          ...token
         });
-      },
-      BREAKER_CONFIGS.pumpfun
-    );
-  }  
+
+        // Track position
+        this.openPositions.set(token.address, {
+          token,
+          entryPrice: result.price,
+          amount: result.amount,
+          entryTime: Date.now(),
+          txHash: result.hash
+        });
+      }
+
+    } catch (error) {
+      await this.errorRecovery.handleError(error, {
+        operation: 'processNewToken',
+        token
+      });
+    }
+  }
+
 
   shouldProcessToken(token) {
     if (!this.isRunning || 
@@ -357,29 +390,143 @@ class FlipperMode extends EventEmitter {
       'pumpfun',
       async () => {
         try {
-          // Subscribe to price updates
-          const ws = await dextools.subscribeToPriceUpdates(
-            'solana',
-            position.token.address,
-            (price) => this.updatePosition(position.token.address, price)
-          );
-
-          this.priceWebsockets.set(position.token.address, ws);
-
-          // Set position timeout
-          setTimeout(() => {
+          // Set up redundant price monitoring
+          const priceFeeds = await Promise.all([
+            // Primary QuickNode WebSocket feed
+            this.positionMonitor.setupRedundantPriceFeeds({
+              address: position.token.address,
+              ...position.token
+            }),
+            
+            // Secondary DexTools price feed
+            dextools.subscribeToPriceUpdates(
+              'solana', 
+              position.token.address,
+              price => this.handlePriceUpdate(position.token.address, price)
+            )
+          ]);
+  
+          // Set up metrics collection
+          this.positionMonitor.on('update', ({ token, metrics }) => {
+            if (token === position.token.address) {
+              this.handleMetricsUpdate(token, {
+                price: metrics.price,
+                volume: metrics.volume,
+                liquidity: metrics.liquidity,
+                holders: metrics.holders,
+                timestamp: Date.now()
+              });
+            }
+          });
+  
+          // Set up error recovery
+          this.positionMonitor.on('error', async (error) => {
+            await this.errorRecovery.handleError(error, {
+              operation: 'monitorPosition',
+              position,
+              component: 'priceMonitor'
+            });
+          });
+  
+          // Set up position timeout with grace period
+          const timeoutId = setTimeout(() => {
             this.closePosition(position.token.address, 'timeout')
-              .catch(error => console.error('Error closing position on timeout:', error));
+              .catch(error => this.handleError(error, {
+                operation: 'closePosition',
+                reason: 'timeout',
+                position
+              }));
           }, this.config.timeLimit);
-
+  
+          // Store monitoring state
+          this.openPositions.set(position.token.address, {
+            ...position,
+            priceFeeds,
+            timeoutId,
+            monitoringStarted: Date.now()
+          });
+  
+          // Initialize position stats
+          this.positionStats.set(position.token.address, {
+            entryTime: position.entryTime,
+            entryPrice: position.entryPrice,
+            highPrice: position.entryPrice,
+            lowPrice: position.entryPrice,
+            updates: 0,
+            volume: 0,
+            liquidity: 0,
+            lastUpdate: Date.now()
+          });
+  
+          // Set up periodic metrics snapshot
+          const snapshotInterval = setInterval(() => {
+            this.saveLiveSystemMetrics().catch(console.error);
+          }, 60000); // Every minute
+  
+          // Clean up on position close
+          this.once(`positionClosed_${position.token.address}`, () => {
+            clearInterval(snapshotInterval);
+            clearTimeout(timeoutId);
+            priceFeeds.forEach(feed => feed.close?.());
+          });
+  
+          console.log(`✅ Position monitoring started for ${position.token.symbol}`);
+  
         } catch (error) {
-          await ErrorHandler.handle(error, null, this.userId); // Log and notify
-          console.warn('Error monitoring position:', error);
-          this.emit('error', error);
+          await this.handleError(error, {
+            operation: 'monitorPosition',
+            position
+          });
+          
+          // Attempt recovery
+          await this.errorRecovery.handleError(error, {
+            component: 'FlipperMode',
+            operation: 'monitorPosition',
+            position,
+            userId: this.userId
+          });
         }
       },
       BREAKER_CONFIGS.pumpfun
     );
+  }   
+  
+  // Add new method to handle metrics updates
+  async handleMetricsUpdate(tokenAddress, metrics) {
+    const position = this.openPositions.get(tokenAddress);
+    if (!position) return;
+  
+    try {
+      // Update position stats with enhanced metrics
+      const stats = this.positionStats.get(tokenAddress) || {
+        entryTime: position.entryTime,
+        entryPrice: position.entryPrice,
+        highPrice: position.entryPrice,
+        lowPrice: position.entryPrice,
+        updates: 0,
+        volume: 0,
+        liquidity: 0
+      };
+  
+      // Update stats with new metrics
+      stats.currentPrice = metrics.price;
+      stats.highPrice = Math.max(stats.highPrice, metrics.price);
+      stats.lowPrice = Math.min(stats.lowPrice, metrics.price);
+      stats.volume = metrics.volume;
+      stats.liquidity = metrics.liquidity;
+      stats.updates++;
+  
+      this.positionStats.set(tokenAddress, stats);
+  
+      // Emit metrics update
+      this.emit('metricsUpdate', {
+        token: tokenAddress,
+        stats
+      });
+    } catch (error) {
+      await ErrorHandler.handle(error);
+      this.emit('error', error);
+    }
   }
 
   async updatePosition(tokenAddress, currentPrice) {
@@ -681,7 +828,20 @@ async fetchMetrics() {
       throw new Error('Failed to fetch metrics. Please check the collections or database connection.');
     }
   }
-
+  // Error recovery handler
+  async handleError(error, context) {
+    try {
+      await this.errorRecovery.handleError(error, {
+        ...context,
+        component: 'FlipperMode',
+        userId: this.userId
+      });
+    } catch (recoveryError) {
+      console.error('Error recovery failed:', recoveryError);
+      await this.stop(null, this.userId); // Force stop if recovery fails
+    }
+  }
+  
   cleanup() {
     // Stop monitoring
     this.isRunning = false;
@@ -699,6 +859,10 @@ async fetchMetrics() {
       ws.close();
     }
     this.priceWebsockets.clear();
+    
+    // Websocket cleanup tasks
+    wsManager.cleanup();
+    positionMonitor.cleanup();
 
     // Remove from monitoring
     monitoringSystem.unregisterComponent('flipperMode');

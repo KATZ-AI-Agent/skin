@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { PriceAlert } from '../models/PriceAlert.js';
 import { dextools } from './dextools/index.js';
 import { walletService } from './wallet/index.js';
+import { tradeService } from './trading/TradeService.js';
 import { ErrorHandler } from '../core/errors/index.js';
 
 class PriceAlertService extends EventEmitter {
@@ -129,21 +130,21 @@ class PriceAlertService extends EventEmitter {
         amount = (balance * percentage / 100).toString();
       }
 
-      // Execute the trade
       if (alert.swapAction?.enabled) {
-        const result = await walletService.executeTrade(alert.network, {
+        const result = await tradeService.executeTrade({
+          network: alert.network,
           action: alert.swapAction.type,
           tokenAddress: alert.tokenAddress,
-          amount: amount,
+          amount: alert.swapAction.amount,
           walletAddress: alert.swapAction.walletAddress,
+          userId: alert.userId,
+          options: {
+            slippage: 1,
+            autoApprove: true
+          }
         });
 
         await alert.markExecuted({
-          ...result,
-          price: currentPrice,
-        });
-
-        this.emit('alertExecuted', {
           userId: alert.userId,
           alertId: alert._id,
           result: { ...result, price: currentPrice },

@@ -32,7 +32,7 @@ export class TradeCommand extends Command {
     }
     return true;
   }
-
+  // Unused, trade service now uses QuickNode smart transactions
   async estimateTrade(tradeParams) {
     return walletService.estimateTrade(tradeParams);
   }

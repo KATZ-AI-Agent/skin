@@ -26,7 +26,7 @@ class AIService {
         const intent = matchIntent(text) || await this.classifyIntent(text);
 
         const result = await this.processCommand(text, intent, userId);
-        const confirmationAudio = await audioService.textToSpeech(`On it sir. Processing your request.. ${text}`);
+        const confirmationAudio = await audioService.textToSpeech(`On it. Processing your intent. ${text}`);
         const responseAudio = await audioService.textToSpeech(result.text);
 
         return {

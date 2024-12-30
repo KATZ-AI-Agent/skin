@@ -1,3 +1,5 @@
+import { quickNodeService } from '../../quicknode/QuickNodeService.js';
+import { ErrorHandler } from '../../../core/errors/index.js';
 import {
   Connection,
   PublicKey,
@@ -148,9 +150,21 @@ export class SolanaWallet {
 
   //From wallet needs passing here
   async sendTransaction(transaction) {
-    const signature = await this.connection.sendTransaction(transaction, []);
-    console.log(`✅ Transaction sent. Signature: ${signature}`);
-    return signature;
+    try {
+      // Prepare as smart transaction
+      const smartTx = await quickNodeService.prepareSmartTransaction(transaction);
+      
+      // Send with optimized fees
+      const result = await quickNodeService.sendSmartTransaction(smartTx);
+
+      return {
+        signature: result.signature,
+        success: true
+      };
+    } catch (error) {
+      await ErrorHandler.handle(error);
+      throw error;
+    }
   }
 
   /** Wallet Methods */

@@ -1,5 +1,6 @@
 import { walletService } from '../../../services/wallet/index.js';
 import { tokenService } from '../../../services/wallet/TokenService.js';
+import { tradeService } from '../../../services/trading/TradeService.js';
 import { formatBalance, formatAddress } from '../utils/formatters.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
 import { USER_STATES } from '../../../core/constants.js';
@@ -166,7 +167,7 @@ export class SendTokenHandler {
       const { tokenAddress, walletAddress, recipientAddress, amount, network } = userData.sendToken;
 
       // Execute the transaction using the appropriate wallet service
-      const result = await walletService.executeTrade(network, {
+      const result = await tradeService.executeTrade(network, {
         action: 'send',
         tokenAddress,
         amount,

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { TimedOrder } from '../models/TimedOrder.js';
 import { dextools } from './dextools/index.js';
+import { tradeService } from './trading/TradeService.js';
 import { format } from 'date-fns';
 import PQueue from 'p-queue';
 import mongoose from 'mongoose';
@@ -193,7 +194,7 @@ class TimedOrderService extends EventEmitter {
           order.tokenAddress
         );
 
-        const result = await walletService.executeTrade(
+        const result = await tradeService.executeTrade(
           order.network,
           {
             action: order.action,
@@ -333,6 +334,29 @@ class TimedOrderService extends EventEmitter {
       this.emit('error', error);
     }
   }
+
+  // Start Price Monitoring
+  async startPriceMonitoring() {
+    try {
+      const uniqueTokens = await this.getUniqueTokensFromPendingOrders();
+      
+      for (const { network, tokenAddress } of uniqueTokens) {
+        await this.positionMonitor.setupRedundantPriceFeeds({
+          address: tokenAddress,
+          network
+        });
+      }
+
+      this.positionMonitor.on('priceUpdate', ({ tokenAddress, price }) => {
+        this.handlePriceUpdate(tokenAddress, price);
+      });
+
+    } catch (error) {
+      console.error('Error starting price monitoring:', error);
+      throw error;
+    }
+  }
+
 
   // Override execute method to handle advanced orders
   async executeOrder(order) {
