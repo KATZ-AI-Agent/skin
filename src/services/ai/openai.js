@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../../core/config.js';
 import { systemPrompts } from './prompts.js';
+import { ErrorHandler } from '../../core/errors/index.js';
 
 class OpenAIService {
   constructor() {
@@ -26,17 +27,23 @@ class OpenAIService {
     }
   }
 
-  clearConversation(userId) {
-    this.conversationHistory.delete(userId);
-  }
-
   async generateAIResponse(input, purpose, userId = null) {
     try {
       if (!this.isConnected) {
         await this.testConnection();
       }
 
-      const messages = this.prepareConversationHistory(userId, purpose, input);
+      // Handle different input types
+      let messages;
+      if (Array.isArray(input)) {
+        // Input is already formatted as messages array
+        messages = input;
+      } else if (typeof input === 'string') {
+        // Format single text input
+        messages = this.prepareTextMessages(input, purpose);
+      } else {
+        throw new Error('Invalid input format');
+      }
 
       const response = await this.openai.chat.completions.create({
         model: this.getModel(purpose),
@@ -46,62 +53,66 @@ class OpenAIService {
       });
 
       const reply = response.choices[0].message;
-      this.storeConversationHistory(userId, messages, reply);
+      this.updateConversationHistory(userId, messages, reply);
 
       return reply.content;
     } catch (error) {
-      console.error('OpenAI API Error:', error);
-      this.isConnected = false;
-      error.name = 'OpenAIError';
+      await ErrorHandler.handle(error);
       throw error;
     }
   }
 
-  prepareConversationHistory(userId, purpose, input) {
-    let messages = userId ? this.conversationHistory.get(userId) || [] : [];
+  prepareTextMessages(text, purpose) {
+    const messages = [{
+      role: 'system',
+      content: systemPrompts[purpose] || systemPrompts.general
+    }];
 
-    if (messages.length === 0) {
-      messages.push({
-        role: 'system',
-        content: systemPrompts[purpose] || systemPrompts.general,
-      });
-    }
-
-    if (purpose === 'image') {
-      messages.push({
-        role: 'user',
-        content: [
-          { type: 'text', text: "what do you think? Can we Ape this price action?" },
-          { type: 'image_url', image_url: input },
-        ],
-      });
-    } else {
-      messages.push({
-        role: 'user',
-        content: input,
-      });
-    }
+    // Add user message
+    messages.push({
+      role: 'user',
+      content: text
+    });
 
     return messages;
   }
 
   getModel(purpose) {
-    if (purpose === 'image') return 'gpt-4-vision-preview';
-    if (purpose === 'pdf') return 'gpt-4';
-    return 'gpt-3.5-turbo';
+    switch (purpose) {
+      case 'image':
+        return 'gpt-4-vision-preview';
+      case 'pdf':
+        return 'gpt-4';
+      default:
+        return 'gpt-3.5-turbo';
+    }
   }
 
   getTemperature(purpose) {
-    return purpose === 'text' ? 0.7 : 0.5;
+    switch (purpose) {
+      case 'intent_classification':
+        return 0.3;
+      case 'trading':
+        return 0.5;
+      default:
+        return 0.7;
+    }
   }
 
-  storeConversationHistory(userId, messages, reply) {
-    messages.push(reply);
-    if (userId) {
-      this.conversationHistory.set(userId, messages);
-    }
+  updateConversationHistory(userId, messages, reply) {
+    if (!userId) return;
+
+    const history = this.conversationHistory.get(userId) || [];
+    const updatedHistory = [...history, ...messages, reply];
+    
+    // Keep last 10 messages
+    const trimmedHistory = updatedHistory.slice(-10);
+    this.conversationHistory.set(userId, trimmedHistory);
+  }
+
+  clearConversationHistory(userId) {
+    this.conversationHistory.delete(userId);
   }
 }
 
-const openAIService = new OpenAIService();
-export { openAIService };
+export const openAIService = new OpenAIService();

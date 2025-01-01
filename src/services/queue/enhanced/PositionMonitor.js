@@ -99,5 +99,3 @@ export class EnhancedPositionMonitor extends EventEmitter {
     this.backupOracles.clear();
   }
 }
-
-export const enhancedPositionMonitor = new EnhancedPositionMonitor();

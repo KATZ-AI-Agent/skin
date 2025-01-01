@@ -56,12 +56,12 @@ export class SolanaTradeOptimizer {
   async calculateOptimalPriorityFee() {
     try {
       const recentFees = await quickNodeService.fetchEstimatePriorityFees();
-      return Math.ceil(recentFees.median * 1.2); // 20% above median
+      return Math.ceil(recentFees.median * 1.2);
     } catch (error) {
-      await ErrorHandler.handle(error);
-      throw error;
+      console.warn('Failed to fetch optimal fees, using fallback:', error);
+      return 5000; // Fallback to 5000 lamports
     }
-  }
+  }  
 
   async simulateTransaction(tx) {
     try {

@@ -1,5 +1,5 @@
-import { User } from '../../../models/User.js';
-import { ErrorHandler } from '../../../core/errors/index.js';
+import { User } from '../../models/User.js';
+import { ErrorHandler } from '../../core/errors/index.js';
 
 export class TransactionValidator {
   static async validateUserAndWallet(userId) {

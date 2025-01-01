@@ -5,6 +5,7 @@ import { tradeService } from './trading/TradeService.js';
 import { format } from 'date-fns';
 import PQueue from 'p-queue';
 import mongoose from 'mongoose';
+import { PositionMonitor } from './quicknode/PositionMonitor.js';
 
 class TimedOrderService extends EventEmitter {
   constructor() {
@@ -14,6 +15,7 @@ class TimedOrderService extends EventEmitter {
     this.initialized = false;
     this.initializationPromise = null;
     this.priceWebsockets = new Map();
+    this.positionMonitor = new PositionMonitor();
   }
 
   async initialize() {

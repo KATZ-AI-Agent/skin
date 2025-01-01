@@ -17,6 +17,7 @@ export async function fetchTrendingTokens(network) {
     async () => {
       const data = await dextoolsRequest(`/ranking/${networkSegment}/hotpools`, null);
       if (!data?.data) throw new Error('Invalid response from DexTools API');
+      console.log('dextools token data: ',data);
       return data.data.map((token) => ({
         name: token.mainToken?.name,
         address: token.mainToken?.address,
@@ -27,12 +28,12 @@ export async function fetchTrendingTokens(network) {
   );
 }
 
-// Fetch trending pairs (DexScreener API)
+// Fetch Boosted pairs (DexScreener API)
 export async function fetchDexScreenerTrendingPairs() {
   return circuitBreakers.executeWithBreaker(
     'dexscreener',
     async () => {
-      const response = await dexscreener.getTrendingPairs();
+      const response = await dexscreener.getBoostedPairs();
       if (!response?.pairs) throw new Error('Invalid response from DexScreener API');
       return response.pairs.map((pair) => ({
         name: pair.baseToken.name,

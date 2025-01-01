@@ -1,8 +1,6 @@
 import { EventEmitter } from 'events';
 import PQueue from 'p-queue';
 import { wsManager } from './WebSocketManager.js';
-import { retryManager } from '../queue/RetryManager.js';
-import { positionMonitor } from '../quicknode/PositionMonitor.js';
 import { monitoringSystem } from '../../core/monitoring/Monitor.js';
 import { circuitBreakers } from '../../core/circuit-breaker/index.js';
 import { BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
@@ -14,7 +12,9 @@ import { db } from '../../core/database.js';
 import { tokenLaunchDetector } from './detection/TokenLaunchDetector.js';
 import { solanaTradeOptimizer } from '../trading/optimizers/SolanaTradeOptimizer.js';
 import { enhancedQueue } from '../queue/enhanced/EnhancedTransactionQueue.js';
-import { enhancedPositionMonitor } from '../monitoring/enhanced/PositionMonitor.js';
+import { EnhancedPositionMonitor } from '../../services/queue/enhanced/PositionMonitor.js';
+import { retryManager } from '../queue/RetryManager.js';
+import { PositionMonitor } from '../quicknode/PositionMonitor.js';
 import { errorRecoverySystem } from '../errors/ErrorRecoverySystem.js';
 
 class FlipperMode extends EventEmitter {
@@ -39,7 +39,7 @@ class FlipperMode extends EventEmitter {
     });
 
     this.transactionQueue = enhancedQueue;
-    this.positionMonitor = enhancedPositionMonitor;
+    this.positionMonitor = EnhancedPositionMonitor;
     this.errorRecovery = errorRecoverySystem;
 
     // Configuration

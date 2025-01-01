@@ -5,7 +5,7 @@ import { config } from '../../core/config.js';
 
 // Create axios instances using config
 const dextoolsAxios = axios.create({
-  baseURL: config.dextoolsUri,
+  baseURL: config.dextoolsBaseUrl,
   timeout: 30000,
   headers: {
     accept: 'application/json',

@@ -19,11 +19,13 @@ import * as bip39 from 'bip39';
 import HDKey from 'hdkey';
 import WebSocket from 'ws';
 
+// Keep direct RPC access for redundancy
 const RPC_ENDPOINT = 'https://lingering-red-liquid.solana-mainnet.quiknode.pro/a2a21741d8c9370d63a0789ab9eb93f926e11764';
 const WS_ENDPOINT = 'wss://lingering-red-liquid.solana-mainnet.quiknode.pro/a2a21741d8c9370d63a0789ab9eb93f926e11764';
 
 export class SolanaWallet {
   constructor() {
+    // Keep direct connection for fallback
     this.connection = new Connection(RPC_ENDPOINT, 'confirmed');
     this.queue = new PQueue({ concurrency: 1 });
     this.webSocket = null;
@@ -33,65 +35,81 @@ export class SolanaWallet {
     };
     this.pingInterval = null;
     this.healthCheckInterval = null;
+    this.quickNode = null;
   }
 
   async initialize() {
     return this.queue.add(async () => {
       if (this.state.initialized) return;
-      console.log('🔄 Initializing SolanaWallet...');
-      await this.setupWebSocket();
-      this.startHealthChecks();
-      this.state.initialized = true;
-      console.log('✅ SolanaWallet initialized.');
+      
+      try {
+        console.log('🔄 Initializing SolanaWallet...');
+        
+        // Initialize QuickNode
+        this.quickNode = quickNodeService;
+        await this.quickNode.initialize();
+        
+        // Setup WebSocket connection
+        await this.setupWebSocket();
+        
+        // Start health monitoring
+        this.startHealthChecks();
+        
+        this.state.initialized = true;
+        console.log('✅ SolanaWallet initialized.');
+      } catch (error) {
+        console.error('❌ Error initializing SolanaWallet:', error);
+        throw error;
+      }
     });
   }
 
   async getGasPrice() {
     try {
-      // Fetch the recent blockhash from the connection
+      // Try QuickNode's priority fee estimation first
+      const priorityFees = await this.quickNode.solana.fetchEstimatePriorityFees({
+        last_n_blocks: 20
+      });
+
+      if (priorityFees?.per_compute_unit?.recommended) {
+        const feeInSOL = (priorityFees.per_compute_unit.recommended / 1e9).toFixed(9);
+        return {
+          price: priorityFees.per_compute_unit.recommended.toString(),
+          formatted: `${feeInSOL} SOL`,
+          source: 'quicknode'
+        };
+      }
+
+      // Fallback to direct RPC method
       const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
-      console.log(`🔹 Fetched recent blockhash: ${blockhash}`);
-  
-      // Create a new transaction and set the recent blockhash
       const transaction = new Transaction();
       transaction.recentBlockhash = blockhash;
-  
-      // Set a dummy fee payer (required to compile the transaction message)
-      const dummyPublicKey = new PublicKey('11111111111111111111111111111111'); // Replace with an actual public key if needed
-      transaction.feePayer = dummyPublicKey;
-  
-      // Compile the transaction message
+      transaction.feePayer = new PublicKey('11111111111111111111111111111111');
+      
       const message = transaction.compileMessage();
-  
-      // Fetch the fee for the compiled message
       const feeResult = await this.connection.getFeeForMessage(message, 'confirmed');
-      console.log(`🔹 Fee result:`, feeResult);
-  
-      // If the fee value is present, calculate and log it
+      
       if (feeResult?.value) {
         const feeInSOL = (feeResult.value / 1e9).toFixed(9);
-        console.log(`💰 Gas Fee: ${feeResult.value} lamports (${feeInSOL} SOL)`);
         return {
           price: feeResult.value.toString(),
           formatted: `${feeInSOL} SOL`,
-          source: 'getFeeForMessage',
+          source: 'rpc'
         };
       }
-  
-      throw new Error('Gas fee data unavailable.');
+
+      throw new Error('Gas fee data unavailable');
     } catch (error) {
-      // Log the full error details for better debugging
-      console.error('❌ Error fetching gas price:', error.message);
+      console.error('❌ Error fetching gas price:', error);
       return {
-        price: '5000', // Fallback fee in lamports
-        formatted: '0.000005 SOL', // Fallback formatted fee
-        source: 'default',
+        price: '5000',
+        formatted: '0.000005 SOL',
+        source: 'default'
       };
     }
   }
-  
-  
-  /** WebSocket Setup */
+
+  // Keep WebSocket setup for direct price monitoring
   async setupWebSocket() {
     if (!WS_ENDPOINT) throw new Error('No WebSocket endpoint available.');
 
@@ -133,8 +151,11 @@ export class SolanaWallet {
   startHealthChecks() {
     this.healthCheckInterval = setInterval(async () => {
       try {
-        const slot = await this.connection.getSlot();
-        console.log(`✅ Health Check Passed: Current Slot: ${slot}`);
+        const [quickNodeSlot, rpcSlot] = await Promise.all([
+          this.quickNode.solana.connection.getSlot(),
+          this.connection.getSlot()
+        ]);
+        console.log(`✅ Health Check Passed: QuickNode Slot: ${quickNodeSlot}, RPC Slot: ${rpcSlot}`);
       } catch (error) {
         console.warn('⚠️ Health Check Failed. Attempting to reconnect...');
         this.initialize();
@@ -142,32 +163,6 @@ export class SolanaWallet {
     }, 1800000); // Every 30 minutes
   }
 
-  async signTransaction(transaction, privateKey) {
-    const keypair = Keypair.fromSecretKey(Buffer.from(privateKey, 'hex'));
-    transaction.sign(keypair);
-    return transaction;
-  }
-
-  //From wallet needs passing here
-  async sendTransaction(transaction) {
-    try {
-      // Prepare as smart transaction
-      const smartTx = await quickNodeService.prepareSmartTransaction(transaction);
-      
-      // Send with optimized fees
-      const result = await quickNodeService.sendSmartTransaction(smartTx);
-
-      return {
-        signature: result.signature,
-        success: true
-      };
-    } catch (error) {
-      await ErrorHandler.handle(error);
-      throw error;
-    }
-  }
-
-  /** Wallet Methods */
   async createWallet() {
     const mnemonic = bip39.generateMnemonic();
     const seed = await bip39.mnemonicToSeed(mnemonic);
@@ -206,21 +201,80 @@ export class SolanaWallet {
   }
 
   async getBalance(address) {
-    const balance = await this.connection.getBalance(new PublicKey(address));
-    return (balance / 1e9).toFixed(9);
+    try {
+      // Try QuickNode first
+      const balance = await this.quickNode.solana.connection.getBalance(new PublicKey(address));
+      return (balance / 1e9).toFixed(9);
+    } catch (error) {
+      // Fallback to direct RPC
+      const balance = await this.connection.getBalance(new PublicKey(address));
+      return (balance / 1e9).toFixed(9);
+    }
   }
 
   async getTokenBalance(walletAddress, tokenMint) {
-    const response = await this.connection.getParsedTokenAccountsByOwner(new PublicKey(walletAddress), {
-      mint: new PublicKey(tokenMint),
-    });
-    return response?.value?.length
-      ? response.value[0].account.data.parsed.info.tokenAmount.uiAmount
-      : '0';
+    try {
+      // Try QuickNode first
+      const response = await this.quickNode.solana.connection.getParsedTokenAccountsByOwner(
+        new PublicKey(walletAddress),
+        { mint: new PublicKey(tokenMint) }
+      );
+      
+      if (!response?.value?.length) {
+        // Fallback to direct RPC
+        const rpcResponse = await this.connection.getParsedTokenAccountsByOwner(
+          new PublicKey(walletAddress),
+          { mint: new PublicKey(tokenMint) }
+        );
+        return rpcResponse?.value?.length
+          ? rpcResponse.value[0].account.data.parsed.info.tokenAmount.uiAmount
+          : '0';
+      }
+      
+      return response.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+    } catch (error) {
+      console.error('Error getting token balance:', error);
+      return '0';
+    }
+  }
+
+  async signTransaction(transaction, privateKey) {
+    const keypair = Keypair.fromSecretKey(Buffer.from(privateKey, 'hex'));
+    transaction.sign(keypair);
+    return transaction;
+  }
+
+  async sendTransaction(transaction) {
+    try {
+      // Use QuickNode's smart transaction sending
+      const smartTx = await this.quickNode.prepareSmartTransaction(transaction);
+      const result = await this.quickNode.sendSmartTransaction(smartTx);
+
+      return {
+        signature: result.signature,
+        success: true
+      };
+    } catch (error) {
+      // Fallback to direct RPC
+      try {
+        const signature = await this.connection.sendTransaction(transaction);
+        return {
+          signature,
+          success: true
+        };
+      } catch (rpcError) {
+        await ErrorHandler.handle(rpcError);
+        throw rpcError;
+      }
+    }
   }
 
   async getSlot() {
-    return await this.connection.getSlot('finalized');
+    try {
+      return await this.quickNode.solana.connection.getSlot('finalized');
+    } catch (error) {
+      return await this.connection.getSlot('finalized');
+    }
   }
 
   cleanup() {

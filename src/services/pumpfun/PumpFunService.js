@@ -5,6 +5,8 @@ import bs58 from 'bs58';
 import fetch from 'node-fetch';
 import { ErrorHandler } from '../../core/errors/index.js';
 import { config } from '../../core/config.js';
+import { wsManager } from './WebSocketManager.js';
+import { tokenLaunchDetector } from './detection/TokenLaunchDetector.js';
 
 class PumpFunService extends EventEmitter {
   constructor(networkConfig) {

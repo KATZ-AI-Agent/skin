@@ -21,6 +21,18 @@ class Config {
     this.solanaApiKey = process.env.SOLANA_API_KEY || 'ip7ONCr6sDycSojM_PZoWawrVM_2c0RW';
     this.apifyApiKey = process.env.APIFY_API_KEY;
 
+    // QuickNode Configuration
+    this.quickNode = {
+      apiKey: process.env.QUICKNODE_API_KEY,
+      evmEndpoint: process.env.QUICKNODE_EVM_ENDPOINT || 'https://api.quicknode.com/v1/your-evm-endpoint',
+      solanaEndpoint: process.env.QUICKNODE_SOLANA_ENDPOINT || 'https://api.quicknode.com/v1/your-solana-endpoint'
+    };
+
+    // Dextools Configuration
+
+    this.dextoolsBaseUrl = process.env.DEXTOOLS_BASE_URL,
+    this.dextoolsApiKey = process.env.DEXTOOLS_API_KEY,
+
     // Network configurations
     this.networks = {
       [NETWORKS.ETHEREUM]: {        

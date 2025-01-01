@@ -4,7 +4,7 @@ import { rateLimiter } from './rate-limiting/RateLimiter.js';
 import { circuitBreakers } from './circuit-breaker/index.js';
 import { matchIntent } from '../services/ai/intents.js';
 import { aiService } from '../services/ai/index.js';
-
+import { contextManager } from '../services/ai/ContextManager.js';
 
 export class MessageHandler extends EventEmitter {
   constructor(bot, commandRegistry) {
@@ -12,7 +12,8 @@ export class MessageHandler extends EventEmitter {
     this.bot = bot;
     this.commandRegistry = commandRegistry;
     this.initialized = false;
-    this.processedCallbacks = new Set(); // Track processed callbacks
+    this.processedCallbacks = new Set();
+    this.contextManager = contextManager;
   }
 
   async initialize() {
@@ -37,12 +38,12 @@ export class MessageHandler extends EventEmitter {
         const callbackId = `${query.from.id}:${query.data}:${Date.now()}`;
         
         if (this.processedCallbacks.has(callbackId)) {
-          return; // Skip if already processed
+          return;
         }
 
         this.processedCallbacks.add(callbackId);
         
-        // Cleanup old callback IDs (keep last 5 minutes)
+        // Cleanup old callback IDs
         const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
         this.processedCallbacks.forEach(id => {
           const timestamp = parseInt(id.split(':')[2]);
@@ -51,18 +52,7 @@ export class MessageHandler extends EventEmitter {
           }
         });
 
-        await circuitBreakers.executeWithBreaker('messages', async () => {
-          const isLimited = await rateLimiter.isRateLimited(query.from.id, 'callback');
-          if (isLimited) {
-            await this.bot.answerCallbackQuery(query.id, {
-              text: '⚠️ Too many requests! Please wait.',
-              show_alert: true
-            });
-            return;
-          }
-
-          await this.handleCallback(query);
-        });
+        await this.handleCallback(query);
       });
 
       this.initialized = true;
@@ -73,22 +63,34 @@ export class MessageHandler extends EventEmitter {
     }
   }
 
-  // Filters if AI should get invlved first or user is in control with command input
   async handleMessage(msg) {
     try {
       if (!msg.text) return;
 
-      // Check for AI intent patterns first
-      const matchedIntent = matchIntent(msg.text);
-      if (matchedIntent) {
-        return this.handleAIResponse(msg, matchedIntent);
+      // Get user's conversation context
+      const context = await this.contextManager.getContext(msg.from.id);
+      const isReplyToBot = msg.reply_to_message?.from?.id === this.bot.id;
+      const isKatzMention = msg.text.toLowerCase().includes('katz');
+
+      // Handle AI conversation if:
+      // 1. Message is a reply to bot
+      // 2. Message mentions KATZ
+      // 3. There's active conversation context
+      if (isReplyToBot || isKatzMention || context.length > 0) {
+        return this.handleAIResponse(msg, null, context);
       }
 
-      // Fall back to command handling
+      // Check for command matches
       const command = this.commandRegistry.findCommand(msg.text);
       if (command) {
         await command.execute(msg);
         return;
+      }
+
+      // Check for intent matches
+      const matchedIntent = matchIntent(msg.text);
+      if (matchedIntent) {
+        return this.handleAIResponse(msg, matchedIntent, context);
       }
 
       // Handle state-based input
@@ -97,12 +99,15 @@ export class MessageHandler extends EventEmitter {
           return;
         }
       }
+
+      // If no other handlers matched, treat as general chat
+      return this.handleAIResponse(msg, null, context);
     } catch (error) {
       await ErrorHandler.handle(error, this.bot, msg.chat.id);
     }
   }
 
-  async handleAIResponse(msg, intent) {
+  async handleAIResponse(msg, intent = null, context = []) {
     const loadingMsg = await this.bot.sendMessage(
       msg.chat.id,
       '🤖 Processing your request...'
@@ -112,27 +117,44 @@ export class MessageHandler extends EventEmitter {
       const response = await aiService.processCommand(
         msg.text,
         intent,
-        msg.from.id
+        msg.from.id,
+        context
       );
 
       await this.bot.deleteMessage(msg.chat.id, loadingMsg.message_id);
-      await this.bot.sendMessage(msg.chat.id, response.text, {
-        parse_mode: 'Markdown'
+
+      // Send response with reply markup to encourage conversation
+      const sentMessage = await this.bot.sendMessage(msg.chat.id, response.text, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          force_reply: true,
+          selective: true
+        }
       });
+
+      // Update conversation context
+      await this.contextManager.updateContext(
+        msg.from.id,
+        msg.text,
+        response.text
+      );
 
       // Handle any follow-up actions
       if (response.actions) {
         await this.handleAIActions(msg.chat.id, response.actions);
       }
+
+      return sentMessage;
     } catch (error) {
+      if (loadingMsg) {
+        await this.bot.deleteMessage(msg.chat.id, loadingMsg.message_id);
+      }
       await ErrorHandler.handle(error, this.bot, msg.chat.id);
     }
   }
 
   async handleCallback(query) {
     try {
-      console.log('📥 Processing callback:', query.data);
-      
       const handled = await this.commandRegistry.handleCallback(query);
       
       if (handled) {
@@ -145,7 +167,6 @@ export class MessageHandler extends EventEmitter {
         });
       }
     } catch (error) {
-      console.error('❌ Error in callback handler:', error);
       await this.bot.answerCallbackQuery(query.id, {
         text: '❌ An error occurred',
         show_alert: false
@@ -158,6 +179,7 @@ export class MessageHandler extends EventEmitter {
     this.bot.removeAllListeners();
     this.removeAllListeners();
     this.processedCallbacks.clear();
+    this.contextManager.cleanup();
     this.initialized = false;
   }
 }

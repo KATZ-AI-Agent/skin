@@ -41,6 +41,10 @@ async function initializeServices() {
     console.log('📡 Connecting to MongoDB...');
     await db.connect();
 
+    // Initialize wallet service
+    console.log('👛 Initializing wallet service...');
+    await walletService.initialize();
+
     // Initialize rate limiter
     console.log('⚡ Initializing rate limiter...');
     await rateLimiter.initialize();
@@ -73,7 +77,7 @@ async function startAgent() {
     await messageHandler.initialize();
 
     // 4. Start Telegram Bot Polling
-    console.log('🤖 Starting Telegram bot...');
+    console.log('🤖 Starting Telegram Interface...');
     await bot.startPolling();
 
     console.log('✅ KATZ AI Agent is up and running!');

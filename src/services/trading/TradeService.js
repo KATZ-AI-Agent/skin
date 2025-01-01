@@ -2,6 +2,7 @@ import { walletService } from '../wallet/index.js';
 import { tokenService } from '../wallet/TokenService.js';
 import { gasEstimationService } from '../gas/GasEstimationService.js';
 import { tokenApprovalService } from '../tokens/TokenApprovalService.js';
+import { quickNodeService } from '../quicknode/QuickNodeService.js';
 import { ErrorHandler } from '../../core/errors/index.js';
 import { EventEmitter } from 'events';
 
@@ -69,27 +70,49 @@ export class TradeService extends EventEmitter {
   }
 
   async buildSolanaTransaction(params) {
-    // Add gas estimation
-    const priorityFee = await quickNodeService.fetchEstimatePriorityFees();
-    const gasEstimate = await quickNodeService.estimateGas(params);
-  
-    // Prepare transaction with proper fees
-    const smartTx = await quickNodeService.prepareSmartTransaction({
-      ...params,
-      priorityFee,
-      gasLimit: gasEstimate.gasLimit,
-      options: {
-        maxRetries: 3,
-        skipPreflight: false,
-        simulation: {
-          enabled: true,
-          replaceOnFailure: true
+    try {
+      // Get priority fee estimate
+      const priorityFeeEstimate = await quickNodeService.solana.fetchEstimatePriorityFees({
+        last_n_blocks: 20,
+        account: params.tokenAddress
+      });
+
+      // Get recommended fee level
+      const priorityFee = priorityFeeEstimate.per_compute_unit.recommended;
+
+      // Prepare smart transaction with all required parameters
+      const smartTx = await quickNodeService.solana.prepareSmartTransaction({
+        transaction: params.transaction,
+        payerPublicKey: params.walletAddress,
+        priorityFee,
+        options: {
+          maxRetries: 3,
+          skipPreflight: false,
+          simulation: {
+            enabled: true,
+            replaceOnFailure: true
+          }
         }
-      }
-    });
-  
-    return smartTx;
-  } 
+      });
+
+      // Return the prepared transaction object that includes:
+      // - The original transaction
+      // - Priority fee instruction
+      // - Compute budget instruction
+      // - Recent blockhash
+      return {
+        transaction: smartTx,
+        priorityFee,
+        options: {
+          skipPreflight: false,
+          maxRetries: 3
+        }
+      };
+    } catch (error) {
+      await ErrorHandler.handle(error);
+      throw error;
+    }
+  }
 
   async buildEvmTransaction(params) {
     // Add EVM transaction building logic
@@ -186,7 +209,7 @@ export class TradeService extends EventEmitter {
     };
   }
 
-  validateTradeParams(params) {
+  async validateTradeParams(params) {
     const required = ['network', 'action', 'tokenAddress', 'amount', 'walletAddress'];
     const missing = required.filter(field => !params[field]);
 
@@ -200,6 +223,19 @@ export class TradeService extends EventEmitter {
 
     if (!['ethereum', 'base', 'solana'].includes(params.network)) {
       throw new Error('Invalid network');
+    }
+
+    // Check token approval for EVM sells
+    if (params.network !== 'solana' && params.action === 'sell') {
+      const approved = await tokenApprovalService.checkAllowance(params.network, {
+        tokenAddress: params.tokenAddress,
+        ownerAddress: params.walletAddress,
+        spenderAddress: this.routerAddress
+      });
+      
+      if (!approved.hasApproval) {
+        throw new Error('Token approval required before selling');
+      }
     }
   }
 }

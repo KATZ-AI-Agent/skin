@@ -9,9 +9,27 @@ class GasEstimationService extends EventEmitter {
     super();
     this.gasPriceCache = new Map();
     this.cacheDuration = 30000; // 30 seconds
+    this.initialized = false;
+  }
+
+  async initialize() {
+    if (this.initialized) return;
+    try {
+      // Ensure wallet service is initialized
+      await walletService.initialize();
+      this.initialized = true;
+      console.log('✅ GasEstimationService initialized');
+    } catch (error) {
+      console.error('❌ Error initializing GasEstimationService:', error);
+      throw error;
+    }
   }
 
   async estimateGas(network, params) {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
     return circuitBreakers.executeWithBreaker(
       'network',
       async () => {
@@ -43,6 +61,10 @@ class GasEstimationService extends EventEmitter {
   }
 
   async getGasPrice(network) {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
     const cached = this.gasPriceCache.get(network);
     if (cached && Date.now() - cached.timestamp < this.cacheDuration) {
       return cached.price;
@@ -71,6 +93,10 @@ class GasEstimationService extends EventEmitter {
   }
 
   async getRecommendedGasPrices(network) {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
     return circuitBreakers.executeWithBreaker(
       'network',
       async () => {
@@ -155,6 +181,7 @@ class GasEstimationService extends EventEmitter {
   cleanup() {
     this.gasPriceCache.clear();
     this.removeAllListeners();
+    this.initialized = false;
   }
 }
 

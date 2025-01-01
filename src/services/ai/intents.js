@@ -49,6 +49,10 @@ export const TRADING_INTENTS = {
   GET_GUIDELINES: 'GET_GUIDELINES',
   SAVE_STRATEGY: 'SAVE_STRATEGY',
   GET_STRATEGIES: 'GET_STRATEGIES',
+
+  // Greeting intent
+  CHAT: 'CHAT',
+  GREETING: 'GREETING',
 };
 
 export const INTENT_PATTERNS = {
@@ -273,7 +277,23 @@ export const INTENT_PATTERNS = {
     'store strategy',
     'remember strategy',
     'add trading plan'
-  ]
+  ],
+
+  //Greeting Patterns
+  [TRADING_INTENTS.CHAT]: [
+    'hey katz',
+    'hi katz',
+    'hello katz',
+    'sup katz',
+    'yo katz'
+  ],
+
+  [TRADING_INTENTS.GREETING]: [
+    'gm',
+    'good morning',
+    'good evening',
+    'good night'
+  ],
 };
 
 /**
@@ -352,9 +372,24 @@ export function formatIntentResponse(intent, data, username) {
     
     case TRADING_INTENTS.SAVE_STRATEGY:
       return formatStrategySaveResponse(data);
+    case TRADING_INTENTS.CHAT:
+    case TRADING_INTENTS.GREETING:
+      return formatChatResponse(data, username);
     default:
       return 'I couldn’t handle it. Please try again.';
   }
+}
+
+function formatChatResponse(data, username) {
+  const greetings = [
+    `Sup ${username}! Ready to get rekt in the trenches? 😼`,
+    `Oh look who it is... ${username} wants to lose some money! 😹`,
+    `*sigh* What do you want ${username}? I was napping... 😾`,
+    `Yo ${username}! Let's find some gems to ape into! 💎`,
+    `Another day, another degen. What's up ${username}? 🐱`
+  ];
+
+  return greetings[Math.floor(Math.random() * greetings.length)];
 }
 
 function formatTrendingResponse(tokens) {

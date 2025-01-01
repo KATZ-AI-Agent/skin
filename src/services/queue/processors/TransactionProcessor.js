@@ -1,6 +1,6 @@
 import { quickNodeService } from '../../quicknode/QuickNodeService.js';
 import { walletService } from '../../wallet/index.js';
-import { TransactionValidator } from '../validators/TransactionValidator.js';
+import { TransactionValidator } from '../TransactionValidator.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
 
 export class TransactionProcessor {
