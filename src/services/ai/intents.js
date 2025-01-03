@@ -66,7 +66,7 @@ export const INTENT_PATTERNS = {
 
   [TRADING_INTENTS.TOKEN_SCAN]: [
     'analyze',
-    'DYOR',
+    'dyor',
     'scan',
     'research',
     'scan token',
@@ -303,6 +303,7 @@ export const INTENT_PATTERNS = {
  */
 export function matchIntent(userInput) {
   const normalizedInput = userInput.toLowerCase();
+  alert(normalizedInput)
 
   for (const [intent, patterns] of Object.entries(INTENT_PATTERNS)) {
     for (const pattern of patterns) {
